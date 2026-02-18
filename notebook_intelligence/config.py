@@ -153,3 +153,8 @@ class NBIConfig:
         active_rules = self.active_rules.copy()
         active_rules[filename] = active
         self.set('active_rules', active_rules)
+
+    @property
+    def neurodesk_rag_settings(self) -> dict:
+        """Get Neurodesk RAG retriever settings."""
+        return self.get('neurodesk_rag_settings', {})

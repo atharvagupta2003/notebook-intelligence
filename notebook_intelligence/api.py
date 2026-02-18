@@ -56,6 +56,7 @@ class BuiltinToolset(str, Enum):
     FileEdit = 'nbi-file-edit'
     FileRead = 'nbi-file-read'
     CommandExecute = 'nbi-command-execute'
+    NeurodeskRAG = 'nbi-neurodesk-rag'
 
 class MCPServerStatus(str, Enum):
     NotConnected = 'not-connected'

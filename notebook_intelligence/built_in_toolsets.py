@@ -7,10 +7,49 @@ import notebook_intelligence.api as nbapi
 from notebook_intelligence.api import BuiltinToolset
 from pathlib import Path
 import subprocess
+import json
 
 from notebook_intelligence.util import get_jupyter_root_dir
 
 log = logging.getLogger(__name__)
+
+# Flag to track if retriever is available
+_NEURODESK_RAG_AVAILABLE = False
+try:
+    from notebook_intelligence.neurodesk_rag import retrieve, CATEGORY_DESCRIPTIONS, NOTEBOOK_DESCRIPTIONS
+    _NEURODESK_RAG_AVAILABLE = True
+except ImportError as e:
+    log.warning(f"Neurodesk RAG retriever not available: {e}. Install langgraph, langchain-chroma, and langchain-openai to enable.")
+
+
+def _get_neurodesk_openai_api_key() -> str:
+    """Get the OpenAI API key for Neurodesk RAG from config or environment."""
+    import os
+    # First check environment variable
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        return api_key
+
+    # Try to get from notebook-intelligence config
+    try:
+        from notebook_intelligence.config import NBIConfig
+        config = NBIConfig()
+        rag_settings = config.neurodesk_rag_settings
+        api_key = rag_settings.get("openai_api_key", "")
+        if api_key:
+            return api_key
+
+        # Fallback: try to get from OpenAI-compatible chat model settings
+        chat_model = config.chat_model
+        if chat_model.get("provider") == "openai-compatible":
+            properties = chat_model.get("properties", [])
+            for prop in properties:
+                if prop.get("id") == "api_key":
+                    return prop.get("value", "")
+    except Exception as e:
+        log.debug(f"Could not get API key from config: {e}")
+
+    return ""
 
 @nbapi.auto_approve
 @nbapi.tool
@@ -665,6 +704,89 @@ COMMAND_EXECUTE_INSTRUCTIONS = """
 Run shell commands with execute_command. All commands execute inside Jupyter root directory for security.
 """
 
+# ---------------------------------------------------------------------------
+# Neurodesk RAG Retriever Tool
+# ---------------------------------------------------------------------------
+
+@nbapi.auto_approve
+@nbapi.tool
+async def neurodesk_search(query: str, **args) -> str:
+    """Search Neurodesk documentation and example notebooks for neuroimaging code examples.
+
+    This tool searches through Neurodesk example notebooks covering:
+    - Diffusion imaging (MRtrix, TBSS, tractography, DTI, CSD, FODs)
+    - Structural imaging (FSL BET, FreeSurfer, QSMxT, Spinal Cord Toolbox)
+    - Spectroscopy (LCModel, Osprey, MRS analysis)
+
+    Use this tool BEFORE writing any neuroimaging code to find relevant examples and best practices.
+
+    Args:
+        query: Natural language description of what you want to accomplish (e.g., "How do I run tractography with MRtrix?", "brain extraction with FSL BET", "FreeSurfer cortical segmentation")
+    """
+    if not _NEURODESK_RAG_AVAILABLE:
+        return "Neurodesk RAG retriever is not available. Please install the required dependencies: langgraph, langchain-chroma, langchain-openai, chromadb."
+
+    # Get API key from config or environment
+    api_key = _get_neurodesk_openai_api_key()
+    if not api_key:
+        return "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable or configure it in Notebook Intelligence settings under 'neurodesk_rag_settings.openai_api_key'."
+
+    try:
+        chunks = retrieve(query, api_key=api_key)
+
+        if not chunks:
+            return f"No relevant Neurodesk documentation found for query: '{query}'. Try rephrasing your query or using different neuroimaging terminology."
+
+        results = []
+        for i, chunk in enumerate(chunks, 1):
+            metadata = chunk.metadata
+            notebook_name = metadata.get('notebook_name', 'Unknown')
+            category = metadata.get('category', 'Unknown')
+            cell_type = metadata.get('cell_type', 'unknown')
+            notebook_url = metadata.get('notebook_url', '')
+
+            result = f"""
+## Result {i}: {notebook_name} ({category})
+**Cell type:** {cell_type}
+**Notebook URL:** {notebook_url}
+
+```
+{chunk.page_content}
+```
+"""
+            results.append(result)
+
+        response_header = f"""# Neurodesk Documentation Search Results
+
+Found {len(chunks)} relevant code examples and documentation for: "{query}"
+
+"""
+        return response_header + "\n---\n".join(results)
+
+    except Exception as e:
+        log.error(f"Error searching Neurodesk documentation: {e}")
+        return f"Error searching Neurodesk documentation: {str(e)}"
+
+
+NEURODESK_RAG_INSTRUCTIONS = """
+You have access to the Neurodesk documentation and example notebooks search tool.
+
+**IMPORTANT: You MUST use the neurodesk_search tool BEFORE writing any neuroimaging code.**
+
+The Neurodesk RAG retriever searches through official Neurodesk example notebooks covering:
+- **Diffusion Imaging**: MRtrix preprocessing, tractography, DTI, TBSS, CSD, FODs, multi-shell analysis
+- **Structural Imaging**: FSL BET brain extraction, FreeSurfer segmentation, QSMxT, Spinal Cord Toolbox
+- **Spectroscopy**: LCModel, Osprey, MRS metabolite quantification
+
+When the user asks about neuroimaging analysis:
+1. First use neurodesk_search with their query to find relevant examples
+2. Review the returned code snippets and documentation
+3. Use the examples as a reference when writing code for the user
+4. Cite the source notebook when applicable
+
+This ensures your code follows Neurodesk best practices and uses the correct tool versions and parameters.
+"""
+
 built_in_toolsets: dict[BuiltinToolset, Toolset] = {
     BuiltinToolset.NotebookEdit: Toolset(
         id=BuiltinToolset.NotebookEdit,
@@ -741,5 +863,15 @@ built_in_toolsets: dict[BuiltinToolset, Toolset] = {
             run_command_in_embedded_terminal
         ],
         instructions=COMMAND_EXECUTE_INSTRUCTIONS
+    ),
+    BuiltinToolset.NeurodeskRAG: Toolset(
+        id=BuiltinToolset.NeurodeskRAG,
+        name="Neurodesk RAG",
+        description="Search Neurodesk documentation and example notebooks for neuroimaging code examples",
+        provider=None,
+        tools=[
+            neurodesk_search
+        ] if _NEURODESK_RAG_AVAILABLE else [],
+        instructions=NEURODESK_RAG_INSTRUCTIONS
     ),
 }
