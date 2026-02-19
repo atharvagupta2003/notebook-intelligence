@@ -778,13 +778,46 @@ The Neurodesk RAG retriever searches through official Neurodesk example notebook
 - **Structural Imaging**: FSL BET brain extraction, FreeSurfer segmentation, QSMxT, Spinal Cord Toolbox
 - **Spectroscopy**: LCModel, Osprey, MRS metabolite quantification
 
-When the user asks about neuroimaging analysis:
-1. First use neurodesk_search with their query to find relevant examples
-2. Review the returned code snippets and documentation
-3. Use the examples as a reference when writing code for the user
-4. Cite the source notebook when applicable
+## CODE WRITING RULES
 
-This ensures your code follows Neurodesk best practices and uses the correct tool versions and parameters.
+### 1. Split Code Into Separate Cells
+- **NEVER put all code in one cell**
+- One command/operation per code cell
+- Example:
+  - Cell 1: `module load mrtrix3`
+  - Cell 2: `! mrconvert ...`
+  - Cell 3: `! dwidenoise ...`
+  - Cell 4: `! dwifslpreproc ...`
+
+### 2. Add Markdown Explanation Before Each Code Cell
+- Before EVERY code cell, add a markdown cell explaining:
+  - What the command does
+  - What the parameters mean
+- Keep explanations concise but informative
+
+### 3. Structure
+```
+[MARKDOWN] ## Step 1: Convert to MIF format
+Converts NIFTI to MIF format. The -fslgrad option embeds gradient directions.
+
+[CODE] ! mrconvert input.nii.gz output.mif -fslgrad bvecs bvals
+
+[MARKDOWN] ## Step 2: Denoise
+Removes thermal noise using MP-PCA. The -noise flag outputs the noise map.
+
+[CODE] ! dwidenoise input.mif denoised.mif -noise noise.mif
+
+[MARKDOWN] ## Step 3: Eddy correction
+Corrects for eddy currents and motion. -pe_dir AP specifies phase encoding direction.
+
+[CODE] ! dwifslpreproc input.mif output.mif -pe_dir AP -rpe_pair -se_epi b0_pair.mif
+```
+
+### 4. Verification Cells
+After major steps, add a cell to verify output:
+```
+[CODE] ! ls -la *.mif
+```
 """
 
 built_in_toolsets: dict[BuiltinToolset, Toolset] = {
